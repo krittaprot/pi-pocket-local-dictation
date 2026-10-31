@@ -70,6 +70,7 @@ export default function createLocalDictation(_host: unknown, web: Web) {
         { name: "cleanupUrl", label: "Cleanup LLM: base URL", type: "text", default: "http://127.0.0.1:1234/v1", description: "Any OpenAI-compatible server: LM Studio (http://127.0.0.1:1234/v1), llama.cpp's llama-server (http://127.0.0.1:8080/v1), Ollama (http://127.0.0.1:11434/v1), or a cloud API. Empty: no cleanup." },
         { name: "cleanupModel", label: "Cleanup LLM: model", type: "text", default: "", description: "The model's name on that server. Empty: the server's loaded model." },
         { name: "cleanupKey", label: "Cleanup LLM: API key", type: "text", secret: true },
+        { name: "cleanupHeaders", label: "Cleanup LLM: extra headers", type: "text", default: "", description: "One per line, Name: value. Some services need one, for example OpenCode Go wants x-opencode-session: local-dictation." },
         { name: "cleanupReasoning", label: "Cleanup LLM: reasoning_effort", type: "text", default: "", description: "Sent as reasoning_effort when set (none, low, ...): for reasoning models that support it. Empty: not sent." },
         { name: "cleanupNotes", label: "Cleanup LLM: your notes", type: "text", default: "", description: "Added to the cleanup instructions: names, projects, and terms to spell right, or how you like text written." },
     ]);
@@ -419,13 +420,22 @@ export default function createLocalDictation(_host: unknown, web: Web) {
             .filter(Boolean)
             .join("\n\n");
         const key = String(web.setting("cleanupKey") ?? "");
+        const extra: Record<string, string> = {};
+
+        for (const line of text("cleanupHeaders").split("\n")) {
+            const at = line.indexOf(":");
+
+            if (at > 0 && /^[\w-]+$/.test(line.slice(0, at).trim())) {
+                extra[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+            }
+        }
         const effort = text("cleanupReasoning");
 
         try {
             const response = await fetch(`${base}/chat/completions`, {
                 method: "POST",
                 signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-                headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+                headers: { ...extra, "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
                 body: JSON.stringify({
                     model: text("cleanupModel") || "local-model",
                     messages: [

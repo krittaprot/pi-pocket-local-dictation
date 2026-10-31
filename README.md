@@ -17,7 +17,7 @@ Tap the mic next to Send (or press Alt+V). Words appear in the message box while
    brew install whisper-cpp          # macOS; on Linux build whisper.cpp and use its whisper-server
    ```
 
-2. Download a model into `~/.cache/whisper-models` (the extension looks there by default):
+2. Download a model into `~/.cache/whisper-models` (the extension looks there by default; any other folder works if you set `liveModel` and `finalModels`, for example on an external drive):
 
    ```sh
    mkdir -p ~/.cache/whisper-models && cd ~/.cache/whisper-models
@@ -40,9 +40,12 @@ Open **Menu → Extensions → local-dictation → Settings**. Cleanup is on by 
 | LM Studio | `http://127.0.0.1:1234/v1` (default) | Load a model, then **Developer → Start Server** |
 | llama.cpp | `http://127.0.0.1:8080/v1` | `llama-server -hf unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M` |
 | Ollama | `http://127.0.0.1:11434/v1` | `ollama run qwen3:4b-instruct` |
-| A cloud API | its `/v1` base URL | set `cleanupKey` and `cleanupModel` |
+| OpenCode Go (DeepSeek) | `https://opencode.ai/inference/go/openai/v1` | `cleanupModel` `deepseek-v4.1-flash`, `cleanupKey` your key, `cleanupHeaders` `x-opencode-session: local-dictation`, `cleanupReasoning` `none` |
+| Another cloud API | its `/v1` base URL | set `cleanupKey` and `cleanupModel` |
 
-Set `cleanupModel` to the model's name on that server (LM Studio and llama.cpp accept an empty name and use the loaded model). Pick a fast, non-reasoning instruct model: 3B to 8B is plenty, and the call sits between "stop" and the final text. For a reasoning model, set `cleanupReasoning` to `none` or `low` if the server supports it.
+Set `cleanupModel` to the model's name on that server (LM Studio and llama.cpp accept an empty name and use the loaded model). The call sits between "stop" and the final text, so pick a fast model and no reasoning: set `cleanupReasoning` to `none` when the service supports it (in my tests `low` was about five times slower and no more accurate).
+
+**Small local models can make things worse.** Qwen3-4B-Instruct (Q4_K_M) first translated Thai into English, even though the prompt forbids it; the extension now names the transcript's script in the request and drops any answer whose script mix differs. It still made mistakes on clean Thai speech (6.4% error before cleanup, 8.3% after). A large hosted model (DeepSeek Flash) left it at about 6.4% to 7.0% on the same clips. Cleanup is for what recognition cannot know: your terms, names, and the conversation. Try your own speech, and leave `cleanupUrl` empty if cleanup does not help you.
 
 If the server is off, slow, or answers something that looks like an answer instead of a correction, you get the raw transcript. Leave `cleanupUrl` empty to turn cleanup off.
 
@@ -68,17 +71,17 @@ It keeps English words that you mix into Thai ("แล้วเพิ่ม test
 
 ### How much it helps
 
-Character error rate on 40 real Thai clips from Google's [FLEURS](https://huggingface.co/datasets/google/fleurs) test set (lower is better), whisper.cpp on an Apple M4, `bench/bench.py`:
+Character error rate on real Thai clips from Google's [FLEURS](https://huggingface.co/datasets/google/fleurs) test set (lower is better), whisper.cpp on an Apple M4, `bench/bench.py`:
 
-| Setup | CER | Time for 40 clips |
+| Recognition (40 clips) | CER | Time |
 |---|---|---|
 | large-v3-turbo q5_0 (Thai forced) | 15.9% | 51 s |
 | Typhoon Whisper turbo q5_0 (converted from `typhoon-ai/typhoon-whisper-turbo`) | 11.0% | 51 s |
-| Thonburian large-v3 q5_0 | 8.4% | 114 s |
-| Thonburian + cleanup LLM | about 7% | |
-| The whole extension (14 clips, a hosted cleanup model) | 4.5% | |
+| **Thonburian large-v3 q5_0** | **8.4%** | 114 s |
+| Thonburian, beam size 5 | 8.0% | 199 s |
+| Thonburian medium q5_0 | 8.8% | 86 s |
 
-These are clean, read-aloud clips. Your own noisy, mixed-language speech will do worse, so measure on your audio. The scripts in `bench/` show how.
+The whole extension, streaming each clip as a microphone would (10 clips): **6.4%** with the language-routed Thonburian pass, against about 15% for the live model alone. DeepSeek Flash cleanup without reasoning, and with no conversation context, measured 7.0% on that read-aloud speech, so on clean audio cleanup is neutral. Its value is with context (your terms and names) and with messy, mixed-language speech, which FLEURS does not have. Measure on your own audio: the scripts in `bench/` show how.
 
 ## Settings
 
@@ -93,6 +96,7 @@ These are clean, read-aloud clips. Your own noisy, mixed-language speech will do
 | `cleanupUrl` | `http://127.0.0.1:1234/v1` | OpenAI-compatible base URL. Empty: no cleanup. |
 | `cleanupModel` | empty | Model name on that server. |
 | `cleanupKey` | empty | API key, if the server needs one. Stays on the server. |
+| `cleanupHeaders` | empty | Extra request headers, one `Name: value` per line. |
 | `cleanupReasoning` | empty | Sent as `reasoning_effort` when set. |
 | `cleanupNotes` | empty | Extra instructions: names and terms to spell right. |
 
@@ -107,7 +111,8 @@ stop -> final-pass model for that language (all audio)                 -> raw te
 
 - Audio goes from your browser to Pi Pocket's server and on to `127.0.0.1` ports only. whisper.cpp servers listen on localhost, one for each model, started when needed and stopped when idle.
 - Recordings longer than 20 s are cut at a quiet moment, so the live pass stays fast. A recording stops by itself after 5 minutes.
-- The cleanup prompt is told never to translate, and its answer is rejected (the raw text stays) if it adds brackets or is far longer or shorter than the transcript.
+- The cleanup prompt is told never to translate, and its answer is rejected (the raw text stays) if its scripts differ from the transcript's (a translation), if it adds brackets, or if it is far longer or shorter.
+- Language routing for the final pass uses the script of the live text (Thai letters mean Thai), then the language the live pass heard most often. A single short window is easily mistaken for a related language.
 - Only the owner turns the extension on and changes settings. Routes are open to people who can steer a session.
 
 ## Limits
@@ -121,7 +126,7 @@ stop -> final-pass model for that language (all audio)                 -> raw te
 
 ```sh
 node test/smoke.mjs                       # offline: loads the module, checks settings and routes
-SETTINGS='{"finalModels":"thai=/path/thonburian.bin","cleanupUrl":"http://127.0.0.1:8080/v1"}' \
+SETTINGS='{"finalModels":"thai=/path/thonburian.bin","cleanupUrl":""}' \
   node test/e2e.mjs clips/ refs.tsv 10    # audio -> text, scored against references
 ```
 
